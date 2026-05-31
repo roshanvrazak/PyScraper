@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
 """
-Tech Company Career Portal Enrichment Script (enrich_targets.py)
------------------------------------------------------------------
-Author: Antigravity AI
-Description:
-    Reads a target company directory (.csv or .xlsx), filters tech-focused
-    organizations, resolves their official homepage and careers URL using
-    a robust, asynchronous search engine fallback, and saves the output to a
-    state-aware tracking JSON file.
+UK Gov Sponsorship Licence CSV → Career Pages Excel Enrichment
+--------------------------------------------------------------
+Reads the UK Government register of licensed sponsors (CSV), filters for
+tech/CS-relevant companies, resolves their career page URLs asynchronously,
+and writes a styled Excel workbook ready for downstream job-scraping agents.
+
+Usage:
+    python3 enrich_targets.py --file sponsor_licence_register.csv --limit 100
+    python3 enrich_targets.py --file sponsor_licence_register.csv --output my_targets.xlsx
 """
 
 import os
 import sys
-import json
 import asyncio
 import argparse
-from datetime import datetime
-from urllib.parse import urlparse
 import logging
 import random
 import re
-from typing import List, Dict, Any, Optional
+from datetime import datetime
+from typing import Optional
+from urllib.parse import urlparse
 
-# Third-party imports (soft-check & import)
 try:
     import pandas as pd
 except ImportError:
@@ -32,7 +31,7 @@ except ImportError:
 try:
     import httpx
 except ImportError:
-    print("[ERROR] httpx is required for async requests. Run: pip install httpx", file=sys.stderr)
+    print("[ERROR] httpx is required. Run: pip install httpx", file=sys.stderr)
     sys.exit(1)
 
 try:
@@ -41,327 +40,538 @@ except ImportError:
     print("[ERROR] beautifulsoup4 is required. Run: pip install beautifulsoup4", file=sys.stderr)
     sys.exit(1)
 
-# Setup Logging
+try:
+    import openpyxl
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+except ImportError:
+    print("[ERROR] openpyxl is required. Run: pip install openpyxl", file=sys.stderr)
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("enrich_targets.log", encoding="utf-8")
-    ]
+        logging.FileHandler("enrich_targets.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger("enrich_targets")
 
-# Tech filtering keywords
-TECH_KEYWORDS = ["Software", "Tech", "Information Technology", "Computer", "AI", "Data", "Consulting"]
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-# Desktop User-Agent pool to mimic real browsers
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+# Keywords used to identify tech/CS-relevant companies by name.
+# The UK Gov CSV has no sector column so we match on Organisation Name.
+TECH_KEYWORDS = [
+    # Core tech identifiers
+    "software", "tech", "technology", "technologies",
+    "computer", "computing", "cyber",
+    # Data / AI / ML
+    "artificial intelligence", "machine learning", "deep learning",
+    "data science", "data engineering", "analytics",
+    # Cloud / infrastructure
+    "cloud", "devops", "saas", "paas", "iaas",
+    # Specific tech domains
+    "semiconductor", "robotics", "automation",
+    "fintech", "edtech", "healthtech", "proptech", "legaltech",
+    "internet", "platform",
+    # IT services (specific enough)
+    "it services", "it consulting", "it solutions",
+    "digital transformation",
 ]
+
+# URL path fragments that indicate a genuine career/jobs page
+CAREER_URL_SIGNALS = [
+    "career", "careers", "jobs", "job", "work-with-us", "work-for-us",
+    "join-us", "join-our-team", "opportunities", "vacancies", "hiring",
+    "recruitment", "talent",
+]
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+]
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Filter target company directory and enrich it with career URLs."
+        description="Enrich UK Gov sponsor CSV with career page URLs → Excel output."
     )
     parser.add_argument(
         "--file", "-f",
         default="dummy_sponsors.csv",
-        help="Path to the target company directory file (.csv or .xlsx)."
+        help="Path to the UK Gov sponsor licence CSV (or xlsx). Default: dummy_sponsors.csv",
     )
     parser.add_argument(
         "--output", "-o",
-        default="curated_targets.json",
-        help="Path to save the output JSON tracking file."
+        default="career_targets.xlsx",
+        help="Output Excel file path. Default: career_targets.xlsx",
     )
     parser.add_argument(
         "--limit", "-l",
         type=int,
         default=None,
-        help="Limit search lookups to N filtered tech companies (helpful for debugging/dry-runs)."
+        help="Process only the first N filtered companies (useful for testing).",
     )
     parser.add_argument(
         "--concurrency", "-c",
         type=int,
         default=2,
-        help="Max concurrent search requests (keep it low to prevent rate limiting)."
+        help="Max concurrent HTTP requests (keep ≤3 to avoid rate-limiting). Default: 2",
     )
     parser.add_argument(
         "--delay", "-d",
         type=float,
-        default=1.5,
-        help="Base delay (in seconds) between requests to prevent bot detection."
+        default=2.0,
+        help="Base delay in seconds between requests. Default: 2.0",
+    )
+    parser.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="Skip tech keyword filtering and process ALL companies in the file.",
     )
     return parser.parse_args()
 
 
-def load_and_filter_companies(file_path: str) -> List[str]:
-    """Loads CSV/Excel file, finds the company/organisation column, and filters based on tech keywords."""
+# ---------------------------------------------------------------------------
+# CSV loading & filtering
+# ---------------------------------------------------------------------------
+
+def load_and_filter(file_path: str, no_filter: bool) -> pd.DataFrame:
+    """Load the UK Gov sponsor CSV and optionally filter for tech companies."""
     if not os.path.exists(file_path):
-        logger.error(f"Target company file not found: {file_path}")
+        logger.error(f"File not found: {file_path}")
         sys.exit(1)
-        
-    logger.info(f"Reading file: {file_path}")
+
     ext = os.path.splitext(file_path)[1].lower()
-    
+    logger.info(f"Reading: {file_path}")
+
     try:
         if ext == ".csv":
-            df = pd.read_csv(file_path)
-        elif ext in [".xlsx", ".xls"]:
-            df = pd.read_excel(file_path)
+            df = pd.read_csv(file_path, dtype=str)
+        elif ext in (".xlsx", ".xls"):
+            df = pd.read_excel(file_path, dtype=str)
         else:
-            logger.error(f"Unsupported file format '{ext}'. Must be .csv, .xls, or .xlsx")
+            logger.error(f"Unsupported format '{ext}'. Use .csv, .xls, or .xlsx")
             sys.exit(1)
     except Exception as e:
         logger.error(f"Failed to read file: {e}")
         sys.exit(1)
-        
-    logger.info(f"Loaded {len(df)} total rows from file.")
-    
-    # Resilient Column detection
-    name_col = None
-    possible_cols = ["organisation name", "organization name", "company name", "company", "organisation", "organization", "name"]
+
+    df = df.fillna("").apply(lambda col: col.str.strip() if col.dtype == "object" else col)
+    logger.info(f"Loaded {len(df)} rows.")
+
+    # Detect the organisation name column
+    name_col = _detect_name_column(df)
+    logger.info(f"Organisation name column detected: '{name_col}'")
+
+    # Drop blank / duplicate names
+    df = df[df[name_col].str.len() > 0].drop_duplicates(subset=[name_col])
+
+    if no_filter:
+        logger.info("--no-filter set: keeping all companies.")
+        return df, name_col
+
+    # Filter by tech keywords (case-insensitive, match anywhere in name)
+    pattern = "|".join(re.escape(kw) for kw in TECH_KEYWORDS)
+    mask = df[name_col].str.contains(pattern, case=False, na=False)
+    filtered = df[mask].copy()
+    logger.info(
+        f"Tech filter: {len(filtered)} / {len(df)} companies match "
+        f"({len(df) - len(filtered)} excluded)."
+    )
+    return filtered, name_col
+
+
+def _detect_name_column(df: pd.DataFrame) -> str:
+    candidates = [
+        "organisation name", "organization name", "company name",
+        "company", "organisation", "organization", "name",
+    ]
     for col in df.columns:
-        if str(col).lower().strip() in possible_cols:
-            name_col = col
-            break
-            
-    if not name_col:
-        # Fallback to the first column
-        name_col = df.columns[0]
-        logger.warning(f"Could not explicitly detect company name column. Falling back to first column: '{name_col}'")
-    else:
-        logger.info(f"Detected company name column: '{name_col}'")
-        
-    # Standardize names and drop duplicates/empty rows
-    df[name_col] = df[name_col].astype(str).str.strip()
-    df = df[df[name_col] != ""].drop_duplicates(subset=[name_col])
-    
-    # Filter by tech-focused keywords (case-insensitive)
-    regex_pattern = "|".join([re.escape(kw) for kw in TECH_KEYWORDS])
-    tech_mask = df[name_col].str.contains(regex_pattern, case=False, na=False)
-    filtered_df = df[tech_mask]
-    
-    filtered_companies = filtered_df[name_col].tolist()
-    logger.info(f"Filtered down to {len(filtered_companies)} tech-focused companies matching keywords: {TECH_KEYWORDS}")
-    return filtered_companies
+        if col.strip().lower() in candidates:
+            return col
+    return df.columns[0]
 
 
-async def search_company_urls_fallback(client: httpx.AsyncClient, company_name: str, delay: float) -> Optional[str]:
-    """
-    Asynchronous fallback scraper querying DuckDuckGo HTML interface.
-    Extracts the first external non-advertisement result.
-    """
-    # Introduce random jitter to prevent uniform request timings
-    await asyncio.sleep(delay + random.uniform(0.5, 2.0))
-    
-    query = f"{company_name} UK careers"
-    url = f"https://html.duckduckgo.com/html/?q={httpx.QueryParams({'q': query})}"
-    
+# ---------------------------------------------------------------------------
+# Resume: load previously enriched rows from output Excel
+# ---------------------------------------------------------------------------
+
+def load_existing_results(output_path: str) -> dict:
+    """Returns a dict of {company_name: row_dict} from a previous run's Excel."""
+    if not os.path.exists(output_path):
+        return {}
+    try:
+        existing_df = pd.read_excel(output_path, dtype=str).fillna("")
+        if "Organisation Name" not in existing_df.columns:
+            return {}
+        results = {}
+        for _, row in existing_df.iterrows():
+            name = row.get("Organisation Name", "").strip()
+            if name:
+                results[name] = row.to_dict()
+        logger.info(f"Resuming: {len(results)} companies already in '{output_path}'.")
+        return results
+    except Exception as e:
+        logger.warning(f"Could not load existing output for resume: {e}. Starting fresh.")
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Career URL discovery
+# ---------------------------------------------------------------------------
+
+def _confidence(career_url: Optional[str]) -> str:
+    """Score the career URL quality: High / Medium / Low / Not Found."""
+    if not career_url:
+        return "Not Found"
+    path = urlparse(career_url).path.lower() + career_url.lower()
+    if any(sig in path for sig in CAREER_URL_SIGNALS):
+        return "High"
+    # URL found but no obvious career signal — could be homepage
+    return "Medium"
+
+
+async def _ddg_search(client: httpx.AsyncClient, query: str, delay: float) -> Optional[str]:
+    """Query DuckDuckGo HTML interface and return the first external result URL."""
+    await asyncio.sleep(delay + random.uniform(0.3, 1.5))
+
+    search_url = "https://html.duckduckgo.com/html/"
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-GB,en;q=0.8",
         "Referer": "https://duckduckgo.com/",
     }
-    
-    max_retries = 3
+
     backoff = 2.0
-    
-    for attempt in range(1, max_retries + 1):
+    for attempt in range(1, 4):
         try:
-            response = await client.get(url, headers=headers, timeout=15.0)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, "html.parser")
-                # DuckDuckGo HTML results are inside links with class result__url or similar
-                links = soup.find_all("a", class_="result__url")
-                
-                valid_urls = []
-                for link in links:
-                    href = link.get("href", "")
+            resp = await client.get(
+                search_url,
+                params={"q": query},
+                headers=headers,
+                timeout=15.0,
+            )
+
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.text, "html.parser")
+
+                # Primary: result__url links
+                for tag in soup.find_all("a", class_="result__url"):
+                    href = _extract_ddg_href(tag.get("href", ""))
                     if href:
-                        # Extract the actual URL (DuckDuckGo sometimes encodes it or embeds in custom link redirect)
-                        # Typical format is: /l/?kh=-1&uddg=https%3A%2F%2Fcareers.google.com%2F
-                        if "/l/?uddg=" in href:
-                            parsed_qs = httpx.QueryParams(href.split("?")[-1])
-                            actual_url = parsed_qs.get("uddg")
-                            if actual_url:
-                                href = actual_url
-                        
-                        # Filter out internal duckduckgo or ad domains
-                        domain = urlparse(href).netloc.lower()
-                        if domain and "duckduckgo.com" not in domain:
-                            valid_urls.append(href)
-                            
-                if valid_urls:
-                    # Return the top non-ad search result
-                    return valid_urls[0]
-                else:
-                    # Let's try parsing broad anchors inside results if result__url wasn't found
-                    anchors = soup.find_all("a", class_="result__snippet")
-                    for anchor in anchors:
-                        href = anchor.get("href", "")
-                        if href and "/l/?uddg=" in href:
-                            parsed_qs = httpx.QueryParams(href.split("?")[-1])
-                            actual_url = parsed_qs.get("uddg")
-                            if actual_url:
-                                href = actual_url
-                        domain = urlparse(href).netloc.lower()
-                        if domain and "duckduckgo.com" not in domain:
-                            return href
-                            
-                logger.warning(f"No valid external links found on DDG for company: '{company_name}'")
+                        return href
+
+                # Fallback: result__a (title links) which carry uddg param
+                for tag in soup.find_all("a", class_="result__a"):
+                    href = _extract_ddg_href(tag.get("href", ""))
+                    if href:
+                        return href
+
                 return None
-                
-            elif response.status_code in [429, 503]:
-                logger.warning(f"DuckDuckGo throttled search for '{company_name}' (Status {response.status_code}). Backoff {backoff}s before retry.")
+
+            if resp.status_code in (429, 503):
+                logger.warning(f"DDG rate-limited (attempt {attempt}). Waiting {backoff}s…")
                 await asyncio.sleep(backoff)
                 backoff *= 2
             else:
-                logger.error(f"Failed to query DDG for '{company_name}' (Status {response.status_code})")
+                logger.error(f"DDG returned HTTP {resp.status_code} for query: {query}")
                 return None
-                
-        except (httpx.RequestError, asyncio.TimeoutError) as e:
-            logger.warning(f"Request error querying DDG for '{company_name}' on attempt {attempt}: {e}")
-            if attempt == max_retries:
-                logger.error(f"Failed to resolve '{company_name}' after {max_retries} attempts.")
+
+        except (httpx.RequestError, asyncio.TimeoutError) as exc:
+            logger.warning(f"DDG request error (attempt {attempt}): {exc}")
+            if attempt == 3:
                 return None
             await asyncio.sleep(backoff)
             backoff *= 2
-            
+
     return None
 
 
-async def search_company_urls_serp(client: httpx.AsyncClient, company_name: str, api_key: str) -> Optional[str]:
-    """Production alternative using SerpAPI (Google Search API) if provided."""
-    url = "https://serpapi.com/search"
-    params = {
-        "engine": "google",
-        "q": f"{company_name} UK careers",
-        "api_key": api_key,
-        "num": 3
-    }
+def _extract_ddg_href(href: str) -> Optional[str]:
+    """Decode a DuckDuckGo result href into a plain external URL."""
+    if not href:
+        return None
+    if "/l/?uddg=" in href or "uddg=" in href:
+        from urllib.parse import parse_qs, unquote
+        qs = href.split("?", 1)[-1]
+        params = parse_qs(qs)
+        uddg = params.get("uddg", [None])[0]
+        if uddg:
+            href = unquote(uddg)
+    domain = urlparse(href).netloc.lower()
+    if domain and "duckduckgo.com" not in domain:
+        return href
+    return None
+
+
+async def _serpapi_search(client: httpx.AsyncClient, query: str, api_key: str) -> Optional[str]:
+    """Use SerpAPI (Google) for higher-quality results when an API key is set."""
     try:
-        response = await client.get(url, params=params, timeout=10.0)
-        if response.status_code == 200:
-            data = response.json()
-            organic_results = data.get("organic_results", [])
-            if organic_results:
-                return organic_results[0].get("link")
+        resp = await client.get(
+            "https://serpapi.com/search",
+            params={"engine": "google", "q": query, "api_key": api_key, "num": 3},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            organic = resp.json().get("organic_results", [])
+            if organic:
+                return organic[0].get("link")
         else:
-            logger.error(f"SerpAPI returned error {response.status_code}: {response.text}")
-    except Exception as e:
-        logger.error(f"SerpAPI connection failed for '{company_name}': {e}")
+            logger.error(f"SerpAPI error {resp.status_code}: {resp.text[:200]}")
+    except Exception as exc:
+        logger.error(f"SerpAPI request failed: {exc}")
     return None
 
 
-async def process_company(
+async def resolve_career_url(
     client: httpx.AsyncClient,
-    company: str,
+    company_name: str,
     semaphore: asyncio.Semaphore,
     delay: float,
-    serpapi_key: Optional[str]
-) -> Optional[Dict[str, Any]]:
-    """Coordinates search lookup and URL normalization for a single company."""
+    serpapi_key: Optional[str],
+) -> Optional[str]:
+    """Find the best career page URL for a company. Returns URL or None."""
     async with semaphore:
-        logger.info(f"Discovering career pages for: '{company}'")
-        
-        career_url = None
+        logger.info(f"Searching: '{company_name}'")
+        query = f'"{company_name}" UK careers jobs site'
+
+        url = None
         if serpapi_key:
-            career_url = await search_company_urls_serp(client, company, serpapi_key)
-            
-        if not career_url:
-            career_url = await search_company_urls_fallback(client, company, delay)
-            
-        if not career_url:
-            logger.warning(f"Skipping '{company}': Career URL could not be resolved.")
-            return None
-            
-        # Standardize the base URL from career URL
-        parsed_url = urlparse(career_url)
-        base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        
-        logger.info(f"Resolved! '{company}' -> Base: {base_url} | Careers: {career_url}")
-        
-        return {
-            "company_name": company,
-            "base_url": base_url,
-            "career_page_url": career_url,
-            "date_added": datetime.utcnow().isoformat() + "Z"
-        }
+            url = await _serpapi_search(client, query, serpapi_key)
+
+        if not url:
+            url = await _ddg_search(client, query, delay)
+
+        if url:
+            logger.info(f"  Found [{_confidence(url)}]: {url}")
+        else:
+            logger.warning(f"  Not found: '{company_name}'")
+
+        return url
 
 
-async def enrich_pipeline(args: argparse.Namespace):
-    # Load state/already scraped targets to enable resuming
-    existing_targets = {}
-    if os.path.exists(args.output):
-        try:
-            with open(args.output, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # Map company_name -> dict entry
-                existing_targets = {item["company_name"]: item for item in data if "company_name" in item}
-            logger.info(f"Resuming pipeline. Loaded {len(existing_targets)} already-enriched targets from '{args.output}'")
-        except Exception as e:
-            logger.warning(f"Could not load existing file '{args.output}' for resume: {e}. Starting fresh.")
+# ---------------------------------------------------------------------------
+# Excel output
+# ---------------------------------------------------------------------------
 
-    # Filter tech-focused sponsors
-    companies = load_and_filter_companies(args.file)
-    
-    # Subtract already enriched items to skip them
-    companies_to_process = [c for c in companies if c not in existing_targets]
-    logger.info(f"{len(companies) - len(companies_to_process)} companies already resolved. {len(companies_to_process)} need lookup.")
-    
+# Column order in output Excel — mirrors UK Gov CSV columns + enrichment cols
+OUTPUT_COLUMNS = [
+    "Organisation Name",
+    "Town/City",
+    "County",
+    "Type & Rating",
+    "Route",
+    "Career Page URL",
+    "Confidence",
+    "Status",
+    "Date Added",
+]
+
+# Styling constants
+HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
+HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
+FOUND_FILL = PatternFill("solid", fgColor="C6EFCE")
+FOUND_FONT = Font(color="276221", bold=True)
+NOT_FOUND_FILL = PatternFill("solid", fgColor="FFC7CE")
+NOT_FOUND_FONT = Font(color="9C0006", bold=True)
+MEDIUM_FILL = PatternFill("solid", fgColor="FFEB9C")
+MEDIUM_FONT = Font(color="9C5700", bold=True)
+ZEBRA_FILL = PatternFill("solid", fgColor="F2F6FA")
+THIN_BORDER = Border(
+    left=Side(style="thin", color="D0D7E0"),
+    right=Side(style="thin", color="D0D7E0"),
+    top=Side(style="thin", color="D0D7E0"),
+    bottom=Side(style="thin", color="D0D7E0"),
+)
+
+
+def write_excel(rows: list[dict], output_path: str):
+    """Write enriched results to a styled Excel workbook."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Career Targets"
+
+    # Header row
+    ws.append(OUTPUT_COLUMNS)
+    for col_idx, _ in enumerate(OUTPUT_COLUMNS, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
+        cell.border = THIN_BORDER
+
+    ws.row_dimensions[1].height = 22
+
+    # Data rows
+    for row_idx, row in enumerate(rows, start=2):
+        zebra = row_idx % 2 == 0
+        status = row.get("Status", "Not Found")
+        confidence = row.get("Confidence", "Not Found")
+
+        for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=row.get(col_name, ""))
+            cell.border = THIN_BORDER
+            cell.alignment = Alignment(vertical="center", wrap_text=False)
+
+            # Colour-code the Confidence / Status columns
+            if col_name in ("Confidence", "Status"):
+                if confidence == "High" or status == "Found":
+                    cell.fill = FOUND_FILL
+                    cell.font = FOUND_FONT
+                elif confidence == "Medium":
+                    cell.fill = MEDIUM_FILL
+                    cell.font = MEDIUM_FONT
+                else:
+                    cell.fill = NOT_FOUND_FILL
+                    cell.font = NOT_FOUND_FONT
+            elif zebra:
+                cell.fill = ZEBRA_FILL
+
+        # Make Career Page URL a clickable hyperlink
+        url_cell = ws.cell(row=row_idx, column=OUTPUT_COLUMNS.index("Career Page URL") + 1)
+        if url_cell.value and url_cell.value.startswith("http"):
+            url_cell.hyperlink = url_cell.value
+            url_cell.font = Font(color="1155CC", underline="single")
+
+    # Auto-fit column widths
+    for col_idx, col_name in enumerate(OUTPUT_COLUMNS, start=1):
+        col_letter = get_column_letter(col_idx)
+        max_len = len(col_name)
+        for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+            val = str(row[0].value or "")
+            max_len = max(max_len, len(val))
+        ws.column_dimensions[col_letter].width = min(max_len + 4, 60)
+
+    # Freeze header row and enable auto-filter
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    # Summary sheet
+    summary_ws = wb.create_sheet(title="Summary")
+    total = len(rows)
+    found = sum(1 for r in rows if r.get("Status") == "Found")
+    high = sum(1 for r in rows if r.get("Confidence") == "High")
+    medium = sum(1 for r in rows if r.get("Confidence") == "Medium")
+    not_found = total - found
+
+    summary_data = [
+        ("Total Companies Processed", total),
+        ("Career URLs Found", found),
+        ("High Confidence URLs", high),
+        ("Medium Confidence URLs", medium),
+        ("Not Found", not_found),
+        ("Success Rate", f"{(found/total*100):.1f}%" if total else "0%"),
+        ("Generated At", datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")),
+    ]
+
+    for r_idx, (label, value) in enumerate(summary_data, start=1):
+        lbl_cell = summary_ws.cell(row=r_idx, column=1, value=label)
+        val_cell = summary_ws.cell(row=r_idx, column=2, value=value)
+        lbl_cell.font = Font(bold=True)
+        lbl_cell.fill = PatternFill("solid", fgColor="EBF3FB")
+        val_cell.fill = PatternFill("solid", fgColor="F8FBFE")
+
+    summary_ws.column_dimensions["A"].width = 32
+    summary_ws.column_dimensions["B"].width = 20
+
+    wb.save(output_path)
+    logger.info(f"Excel saved → {output_path}  ({total} rows, {found} URLs found)")
+
+
+# ---------------------------------------------------------------------------
+# Main pipeline
+# ---------------------------------------------------------------------------
+
+async def run(args: argparse.Namespace):
+    # Load source CSV
+    filtered_df, name_col = load_and_filter(args.file, args.no_filter)
+
+    # Resume: load already-enriched companies
+    existing = load_existing_results(args.output)
+
+    # Determine which companies still need lookup
+    all_companies = filtered_df[name_col].tolist()
+    pending = [c for c in all_companies if c not in existing]
+    logger.info(f"{len(existing)} already resolved, {len(pending)} pending.")
+
     if args.limit:
-        companies_to_process = companies_to_process[:args.limit]
-        logger.info(f"Applying lookup limit of {args.limit}. Active batch: {len(companies_to_process)}")
-        
-    if not companies_to_process:
-        logger.info("No new companies to resolve. Exiting.")
-        # Ensure we write out what we already had
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(list(existing_targets.values()), f, indent=4)
-        return
+        pending = pending[: args.limit]
+        logger.info(f"--limit {args.limit}: processing {len(pending)} companies this run.")
 
-    # Check for SerpAPI credentials in environment variables
     serpapi_key = os.environ.get("SERPAPI_API_KEY")
     if serpapi_key:
-        logger.info("Found SERPAPI_API_KEY in environment variables. Using SerpAPI Google engine.")
+        logger.info("SERPAPI_API_KEY found — using Google Search engine.")
     else:
-        logger.info("No SERPAPI_API_KEY detected. Utilizing resilient DuckDuckGo Lite/HTML fallback.")
+        logger.info("No SERPAPI_API_KEY — using DuckDuckGo HTML fallback.")
 
+    # Build a lookup map for original row metadata
+    meta_map = {
+        row[name_col]: row.to_dict()
+        for _, row in filtered_df.iterrows()
+    }
+
+    # Async enrichment
     semaphore = asyncio.Semaphore(args.concurrency)
-    
+
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        tasks = [
-            process_company(client, company, semaphore, args.delay, serpapi_key)
-            for company in companies_to_process
-        ]
-        
-        # Gather search results
-        results = await asyncio.gather(*tasks)
-        
-        # Filter successful enrichments and merge with existing
-        new_enrichments = [r for r in results if r is not None]
-        for item in new_enrichments:
-            existing_targets[item["company_name"]] = item
-            
-    # Save the consolidated file
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(list(existing_targets.values()), f, indent=4)
-        
-    logger.info(f"Pipeline enrichment complete! Successfully saved {len(existing_targets)} targets to '{args.output}'")
+        tasks = {
+            company: resolve_career_url(client, company, semaphore, args.delay, serpapi_key)
+            for company in pending
+        }
+        task_results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        resolved = dict(zip(tasks.keys(), task_results))
+
+    # Merge new results into existing
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    for company, result in resolved.items():
+        url = result if isinstance(result, str) else None
+        confidence = _confidence(url)
+        meta = meta_map.get(company, {})
+
+        existing[company] = {
+            "Organisation Name": company,
+            "Town/City": meta.get("Town/City", ""),
+            "County": meta.get("County", ""),
+            "Type & Rating": meta.get("Type & Rating", ""),
+            "Route": meta.get("Route", ""),
+            "Career Page URL": url or "",
+            "Confidence": confidence,
+            "Status": "Found" if url else "Not Found",
+            "Date Added": now,
+        }
+
+    # Also ensure previously enriched companies have all output columns
+    for company, row in existing.items():
+        if "Status" not in row:
+            row["Status"] = "Found" if row.get("Career Page URL") else "Not Found"
+        if "Confidence" not in row:
+            row["Confidence"] = _confidence(row.get("Career Page URL"))
+
+    # Write Excel
+    rows = list(existing.values())
+    write_excel(rows, args.output)
 
 
 def main():
     args = parse_arguments()
     try:
-        asyncio.run(enrich_pipeline(args))
+        asyncio.run(run(args))
     except KeyboardInterrupt:
-        logger.info("\nEnrichment pipeline interrupted by user. Saved records remain intact.")
+        logger.info("\nInterrupted. Progress is saved in the output Excel.")
 
 
 if __name__ == "__main__":

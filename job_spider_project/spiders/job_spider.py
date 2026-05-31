@@ -1,80 +1,95 @@
 # -*- coding: utf-8 -*-
 """
-Corporate Lead Tech Job Scraper Spider (job_spider.py)
--------------------------------------------------------
-Author: Antigravity AI
-Description:
-    Core Scrapy spider that reads targets from curated_targets.json, crawls
-    them politely, extracts tech roles, parses details (salary, location),
-    checks for custom exclusion keywords, and gracefully records soft errors.
+CS Job Hunter Spider (job_spider.py)
+-------------------------------------
+Reads career page targets from the Excel produced by enrich_targets.py,
+crawls each career portal politely, and extracts Computer Science /
+software engineering roles suitable for graduate / junior applicants.
 """
 
 import os
-import json
 import re
 from datetime import datetime
 import scrapy
-from urllib.parse import urlparse
+import pandas as pd
 from job_spider_project.items import JobItem
 
-# Job role target keywords (case-insensitive)
+# CS-focused job keywords — tuned for graduate / junior roles
 JOB_KEYWORDS = [
-    "software engineer", "developer", "data engineer", "devops",
-    "cloud architect", "computer science", "backend", "frontend"
+    "software engineer", "software developer", "computer science",
+    "graduate engineer", "graduate developer", "junior developer",
+    "junior engineer", "data engineer", "data scientist", "data analyst",
+    "machine learning", "ml engineer", "backend developer", "frontend developer",
+    "full stack", "fullstack", "devops engineer", "cloud engineer",
+    "platform engineer", "site reliability", "python developer",
+    "java developer", "web developer", "mobile developer",
+    "technology graduate", "tech graduate", "engineering graduate",
 ]
 
-# Exclusion search keywords for role/location restriction warning flags
-EXCLUSION_KEYWORDS = ["visa", "sponsor", "indigenous"]
+# Roles / seniority levels to exclude (not suitable for graduates)
+EXCLUDE_SENIORITY = [
+    "senior", "lead", "principal", "staff", "director",
+    "head of", "vp ", "vice president", "architect", "manager",
+    "10+ years", "10 years", "8+ years",
+]
 
-# Common UK Tech Cities for location fallback scanner
+# Flags that warn of potential sponsorship restrictions
+EXCLUSION_KEYWORDS = ["no sponsorship", "must have right to work", "no visa", "citizens only"]
+
 UK_CITIES = [
     "london", "cambridge", "manchester", "bristol", "edinburgh",
-    "birmingham", "leeds", "glasgow", "reading", "oxford", "belfast"
+    "birmingham", "leeds", "glasgow", "reading", "oxford", "belfast",
+    "sheffield", "nottingham", "liverpool", "newcastle", "cardiff",
 ]
 
 
 class JobHunterSpider(scrapy.Spider):
     name = "JobHunter"
-    
-    def __init__(self, targets_file="curated_targets.json", *args, **kwargs):
-        super(JobHunterSpider, self).__init__(*args, **kwargs)
+
+    def __init__(self, targets_file="career_targets.xlsx", *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.targets_file = targets_file
         self.error_log_file = "scraping_errors.log"
-        
+
     def start_requests(self):
-        """Reads target list from JSON file and schedules initial crawls."""
+        """Load targets from the enrichment Excel and schedule crawls."""
         if not os.path.exists(self.targets_file):
-            self.logger.error(f"Curated targets file not found: {self.targets_file}. Please run enrich_targets.py first.")
+            self.logger.error(
+                f"Targets file not found: '{self.targets_file}'. "
+                "Run enrich_targets.py first."
+            )
             return
-            
+
         try:
-            with open(self.targets_file, "r", encoding="utf-8") as f:
-                targets = json.load(f)
-        except Exception as e:
-            self.logger.error(f"Failed to parse targets file: {e}")
+            df = pd.read_excel(self.targets_file, dtype=str).fillna("")
+        except Exception as exc:
+            self.logger.error(f"Failed to read targets Excel: {exc}")
             return
-            
-        self.logger.info(f"Loaded {len(targets)} targets from '{self.targets_file}'. Starting job search...")
-        
-        for target in targets:
-            company_name = target.get("company_name")
-            career_url = target.get("career_page_url")
-            base_url = target.get("base_url")
-            
+
+        # Only crawl rows where a career URL was successfully found
+        found_df = df[df.get("Status", pd.Series(dtype=str)) == "Found"] if "Status" in df.columns else df
+        targets = found_df.to_dict(orient="records")
+        self.logger.info(
+            f"Loaded {len(targets)} / {len(df)} targets with career URLs from '{self.targets_file}'."
+        )
+
+        for row in targets:
+            company_name = row.get("Organisation Name", "").strip()
+            career_url = row.get("Career Page URL", "").strip()
+
             if not career_url or not company_name:
                 continue
-                
-            # Schedule request with errback for resilient soft-error logging
+
             yield scrapy.Request(
                 url=career_url,
                 callback=self.parse_career_page,
                 errback=self.handle_error,
                 meta={
                     "company_name": company_name,
-                    "base_url": base_url,
                     "career_page_url": career_url,
-                    "download_timeout": 15.0
-                }
+                    "town": row.get("Town/City", ""),
+                    "download_timeout": 15.0,
+                },
             )
 
     def parse_career_page(self, response):
@@ -97,9 +112,10 @@ class JobHunterSpider(scrapy.Spider):
                 
             # Check if anchor text contains any target job keywords
             text_lower = text.lower()
-            is_tech_job = any(keyword in text_lower for keyword in JOB_KEYWORDS)
-            
-            if is_tech_job:
+            is_cs_job = any(keyword in text_lower for keyword in JOB_KEYWORDS)
+            is_senior = any(lvl in text_lower for lvl in EXCLUDE_SENIORITY)
+
+            if is_cs_job and not is_senior:
                 # Basic cleaning of extra whitespace in title
                 job_title = re.sub(r'\s+', ' ', text).strip()
                 

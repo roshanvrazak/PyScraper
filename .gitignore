@@ -1,0 +1,23 @@
+# Large data files — do not commit
+sponsor_licence_register.csv
+*.xlsx
+*.xls
+curated_targets.json
+career_targets.xlsx
+
+# Logs
+*.log
+scraping_errors.log
+enrich_targets.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+*.egg-info/
+
+# Scrapy
+.scrapy/
