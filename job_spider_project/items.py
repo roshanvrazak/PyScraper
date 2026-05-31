@@ -13,5 +13,5 @@ class JobItem(scrapy.Item):
     location = scrapy.Field()
     salary_range = scrapy.Field()
     application_url = scrapy.Field()
-    sponsorship_keyword_found = scrapy.Field()
+    exclusion_keyword_found = scrapy.Field()
     date_scraped = scrapy.Field()

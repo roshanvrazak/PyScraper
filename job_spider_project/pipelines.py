@@ -29,7 +29,7 @@ class ExcelExportPipeline:
     def __init__(self):
         self.seen_urls = set()
         self.items = []
-        self.output_filename = "curated_sponsored_jobs.xlsx"
+        self.output_filename = "curated_job_opportunities.xlsx"
         
     def open_spider(self, spider):
         logger.info("ExcelExportPipeline opened. Initializing collector...")
@@ -57,7 +57,7 @@ class ExcelExportPipeline:
             item["salary_range"] = str(salary).strip()
             
         # Standardize boolean exclusion flag
-        item["sponsorship_keyword_found"] = bool(item.get("sponsorship_keyword_found", False))
+        item["exclusion_keyword_found"] = bool(item.get("exclusion_keyword_found", False))
         
         # Add scraping date
         if not item.get("date_scraped"):
@@ -83,7 +83,7 @@ class ExcelExportPipeline:
         # Create a new workbook and select active sheet
         wb = openpyxl.Workbook()
         ws = wb.active
-        ws.title = "Sponsored Tech Jobs"
+        ws.title = "Curated Tech Jobs"
         
         # Enable visible gridlines explicitly
         ws.views.sheetView[0].showGridLines = True
@@ -115,7 +115,7 @@ class ExcelExportPipeline:
             "Job Title", 
             "Location", 
             "Salary Range", 
-            "Visa Exclusions Found?", 
+            "Exclusions Found?", 
             "Application URL", 
             "Date Scraped"
         ]
@@ -130,8 +130,8 @@ class ExcelExportPipeline:
             
         # Write records
         for row_idx, item in enumerate(self.items, 2):
-            # Check if visa/sponsorship exclusions were flagged
-            excl_flag = item["sponsorship_keyword_found"]
+            # Check if custom exclusions were flagged
+            excl_flag = item["exclusion_keyword_found"]
             excl_text = "Yes" if excl_flag else "No"
             
             # Retrieve cells

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-UK Gov Visa Sponsorship Pre-Scrape Enrichment Script (enrich_targets.py)
------------------------------------------------------------------------
+Tech Company Career Portal Enrichment Script (enrich_targets.py)
+-----------------------------------------------------------------
 Author: Antigravity AI
 Description:
-    Reads a UK Gov visa sponsorship file (.csv or .xlsx), filters tech-focused
+    Reads a target company directory (.csv or .xlsx), filters tech-focused
     organizations, resolves their official homepage and careers URL using
     a robust, asynchronous search engine fallback, and saves the output to a
     state-aware tracking JSON file.
@@ -65,12 +65,12 @@ USER_AGENTS = [
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Filter UK Gov Visa Sponsorship file and enrich it with career URLs."
+        description="Filter target company directory and enrich it with career URLs."
     )
     parser.add_argument(
         "--file", "-f",
         default="dummy_sponsors.csv",
-        help="Path to the UK Gov visa sponsorship file (.csv or .xlsx)."
+        help="Path to the target company directory file (.csv or .xlsx)."
     )
     parser.add_argument(
         "--output", "-o",
@@ -101,7 +101,7 @@ def parse_arguments() -> argparse.Namespace:
 def load_and_filter_companies(file_path: str) -> List[str]:
     """Loads CSV/Excel file, finds the company/organisation column, and filters based on tech keywords."""
     if not os.path.exists(file_path):
-        logger.error(f"Sponsorship file not found: {file_path}")
+        logger.error(f"Target company file not found: {file_path}")
         sys.exit(1)
         
     logger.info(f"Reading file: {file_path}")

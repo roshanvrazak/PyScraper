@@ -1,43 +1,42 @@
-# UK Gov Visa Sponsorship Tech Job Scraping Pipeline
-### Operations & Execution Guide (Ubuntu Linux Terminal)
+# Automated Corporate Lead Enrichment & Resilient Web-Crawling Pipeline
+### Systems & Execution Operations Guide (Ubuntu Linux Terminal)
 
-This guide provides step-by-step instructions on setting up, verifying, and executing the complete, decoupled scraping pipeline inside your **Ubuntu Linux Terminal**.
+This repository provides an enterprise-grade, multi-stage data pipeline designed to ingest organization registries, asynchronously enrich target records with verified web resources, politely crawl remote career portals with anti-bot resistance, and output deduplicated, professionally formatted analytics dashboards into Microsoft Excel workbook sheets.
 
 ---
 
-## 📂 Project Architecture
+## 📂 System Architecture & Components
 
-The pipeline consists of two decoupled scripts running sequentially to isolate intensive network searches from direct scraping:
+The pipeline consists of decoupled components operating sequentially to isolate heavy search queries from intensive portal parsing:
 ```text
 job_scraper_pipeline/
-├── enrich_targets.py          # Stage 1: Filter UK Gov sponsors & discover domains (Async)
-├── dummy_sponsors.csv         # Mock sponsor data for automated dry-runs
-├── README.md                  # This documentation guide
-├── scrapy.cfg                 # Scrapy project configuration
-└── job_spider_project/        # Stage 2 & 3: Scraping & Excel Export Pipeline
+├── enrich_targets.py          # Stage 1: Async target directory filter & domain discovery
+├── dummy_sponsors.csv         # Mock target organization list for automated dry-runs
+├── README.md                  # Comprehensive operations guide
+├── scrapy.cfg                 # Central Scrapy project settings
+└── job_spider_project/        # Stage 2 & 3: Resilient crawler & styled Excel pipeline
     ├── __init__.py
-    ├── items.py               # Job scraping data schema definition
+    ├── items.py               # Job scraping data schema model definition
     ├── middlewares.py         # Custom User-Agent rotation middleware
-    ├── pipelines.py           # openpyxl pipeline (cleaning, deduplication, styling)
-    ├── settings.py            # Autothrottle, delays, concurrency configuration
+    ├── pipelines.py           # openpyxl excel reporter (deduplication, formatting, cell-styling)
+    ├── settings.py            # Autothrottle, delays, concurrent requests configuration
     └── spiders/
         ├── __init__.py
-        └── job_spider.py      # Core JobHunterSpider spider
+        └── job_spider.py      # Core JobHunterSpider crawling engine
 ```
 
 ---
 
 ## 🛠️ Step 1: System Environment Setup
 
-Open your Ubuntu terminal and install the required Python environment packages:
+Open your terminal and install the core Python execution packages:
 
 ```bash
 # 1. Update package list and install virtual environment dependencies
 sudo apt update
 sudo apt install python3-pip python3-venv -y
 
-# 2. Navigate to your project directory (or create a dedicated working space)
-# Recommendation: Set your active workspace to this directory
+# 2. Navigate to your active project workspace directory
 cd path/to/job_scraper_pipeline
 
 # 3. Create a clean Python Virtual Environment (venv)
@@ -51,7 +50,7 @@ source venv/bin/activate
 
 ## 📦 Step 2: Install Python Dependencies
 
-With your virtual environment activated (`(venv)` should be prefixed in your terminal prompt), run the following command to install the required packages:
+With your virtual environment activated, upgrade pip and install the required libraries:
 
 ```bash
 # Install core dependencies: Pandas, BeautifulSoup4, HTTPX, Scrapy and OpenPyXL
@@ -59,59 +58,55 @@ pip install --upgrade pip
 pip install pandas openpyxl scrapy httpx beautifulsoup4
 ```
 
-*Verification check: Ensure all libraries are installed successfully with `pip list`.*
+*Verification check: Ensure all libraries are installed successfully by running `pip list`.*
 
 ---
 
-## 🚀 Step 3: Run Stage 1 — Pre-Scrape Enrichment
+## 🚀 Step 3: Run Stage 1 — Pre-Scrape Async Target Enrichment
 
-This script reads your local UK Gov sponsorship register (supporting `.csv`, `.xls`, and `.xlsx` files), filters out non-tech organizations based on target keywords, and runs an asynchronous lookup to resolve their careers URLs.
-
-### 📋 Where to get the official UK Gov Visa Sponsorship list?
-You can download the live official visa sponsorship dataset directly from the UK Gov website in CSV format:
-* **Download URL:** [UK Gov Register of Licensed Sponsors: Workers](https://www.gov.uk/government/publications/register-of-licensed-sponsors-workers)
+The enrichment utility takes a local organization directory (supporting `.csv`, `.xls`, and `.xlsx` formats), filters for target sectors (e.g., tech-focused entities) based on keywords, and runs a high-performance **asynchronous lookup** to resolve homepages and career portal URLs.
 
 ### 🏃‍♂️ Running the Enrichment Script
 
-#### A. Run a Dry-Run Verification (using mock data)
-To verify everything is working perfectly, run the script against the included mock dataset and limit the lookup to 5 companies:
+#### A. Execute a Dry-Run Verification (using mock data)
+Verify the setup using the included mock directory, limiting the lookup to 5 companies:
 ```bash
 python3 enrich_targets.py --file dummy_sponsors.csv --limit 5 --output curated_targets.json
 ```
 
-#### B. Run on the Actual UK Gov Sponsorship File
-To run on your actual full sponsorship file (e.g. `sponsors.csv`) loaded into the directory:
+#### B. Execute on Full Target Directories
+To run on your actual full target company listing file (e.g., `companies.csv`):
 ```bash
-python3 enrich_targets.py --file sponsors.csv --limit 50 --output curated_targets.json
+python3 enrich_targets.py --file companies.csv --limit 50 --output curated_targets.json
 ```
-*(Tip: Performing organic lookups for 50,000+ companies will hit search limits. We strongly recommend using the `--limit` option to scrape in batches, or registering a **SerpAPI** key to handle unlimited searches).*
+*(Tip: Lookups for very large directories can hit search engine rate-limits. We recommend using the `--limit` option to process targets in batches, or registering a SerpAPI key to execute high-volume lookups).*
 
-#### C. Production Running with SerpAPI Key (Optional)
-If you have a Google Search API key (SerpAPI) to prevent any DuckDuckGo throttling blocks during massive runs:
+#### C. Production Execution with SerpAPI (Optional)
+If you have a Google Search API key (SerpAPI) to handle large enterprise runs:
 ```bash
 export SERPAPI_API_KEY="your_serp_api_key_here"
-python3 enrich_targets.py --file sponsors.csv --limit 200 --output curated_targets.json
+python3 enrich_targets.py --file companies.csv --limit 200 --output curated_targets.json
 ```
 
-*Output:* This script produces `curated_targets.json`. You can verify its content with `cat curated_targets.json`. It will look like this:
+*Expected Output:* The script generates a consolidated tracking sheet `curated_targets.json`. It will look like this:
 ```json
 [
     {
         "company_name": "Google UK Limited",
         "base_url": "https://careers.google.com",
         "career_page_url": "https://careers.google.com/jobs/",
-        "date_added": "2026-05-31T11:50:00Z"
+        "date_added": "2026-05-31T12:00:00Z"
     }
 ]
 ```
 
-*Resilience Note:* The script saves state. If interrupted, running it again will **skip** already resolved companies, protecting your search limits.
+*Resilience Feature:* The script is fully **state-aware**. If interrupted, running it again will automatically skip previously resolved companies, preserving your search quotas.
 
 ---
 
-## 🕷️ Step 4: Run Stage 2 & 3 — Scrapy Job crawling & Excel Export
+## 🕷️ Step 4: Run Stage 2 & 3 — Polite Scrapy Crawler & Excel Pipeline
 
-Once `curated_targets.json` is generated, run the Scrapy spider to scan these portals, identify tech job opportunities, filter out visa exclusions, and output an elegantly styled Excel workbook.
+Once `curated_targets.json` is generated, execute the Scrapy crawler. The spider politely scans the resolved career portals, extracts active tech opportunities, filters roles based on custom restriction keywords, and outputs a highly polished Excel spreadsheet.
 
 ### 🏃‍♂️ Run the Scrapy Crawl command:
 ```bash
@@ -119,34 +114,33 @@ Once `curated_targets.json` is generated, run the Scrapy spider to scan these po
 scrapy crawl JobHunter
 ```
 
-### 🔍 What happens during the scrape?
-1. **Dynamic Target Crawling:** `JobHunterSpider` starts and loads target companies from `curated_targets.json`.
-2. **Polite Crawling:** The crawler rotates browser User-Agents for each site, enforces a `2.0` second basic politeness delay, and dynamically activates the **AutoThrottle** system based on target servers load.
-3. **Keyword Matching & Exclusion Detection:** It visits job detail links, extracts title and location, extracts salary through regex patterns, and checks if visa exclusions like `"no sponsorship"`, `"must possess local visa"`, or `"indigenous only"` appear in the text.
-4. **Resilient Failure Recovery:** If a domain returns a `403 Forbidden`, `404 Not Found`, or times out, it is handled as a soft error. The system records it inside `scraping_errors.log` and proceeds to the next target without interrupting the crawler queue.
-5. **Stage 3 Pipeline:** Items flow into `ExcelExportPipeline`, where duplicates are filtered by URL, whitespaces are trimmed, and records are sorted by Company Name.
-6. **Excel Generation:** The pipeline writes records into a highly curated spreadsheet named `curated_sponsored_jobs.xlsx`.
+### 🔍 Engineering Details of the Scrape Phase:
+1. **Dynamic Target Allocation:** `JobHunterSpider` starts, loading seed portals from the enriched `curated_targets.json`.
+2. **Anti-Bot & Polite Crawling:** The crawler rotates browser User-Agents for each destination, enforces a `2.0` second safety delay, and leverages Scrapy's dynamic **AutoThrottle** system to adjust speed in real time according to remote server load.
+3. **Keyword Matching & Pattern Detection:** It parses listing pages to identify technology keywords, extracts salary packages using robust regular expressions, and checks for custom exclusion keywords (e.g., checking if roles have specific localization requirements or restrictions).
+4. **Soft-Error Isolation:** If a domain returns a `403 Forbidden`, `404 Not Found`, or times out, it is handled gracefully as a soft error. The failure is recorded in `scraping_errors.log` and the crawler moves to the next company in the queue without crashing.
+5. **Excel Export Pipeline:** The items are passed into the `ExcelExportPipeline`, where they are filtered for duplicates by URL, stripped of redundant white spaces, and sorted alphabetically by Company Name.
+6. **Excel Generation:** The pipeline writes records into a highly-styled corporate sheet named `curated_job_opportunities.xlsx`.
 
 ---
 
 ## 📊 Step 5: Inspecting Outputs & Diagnostics
 
-### 1. The Curated Spreadsheet (`curated_sponsored_jobs.xlsx`)
-This file is generated in your current working directory. You can copy it to your local machine and open it in Excel, LibreOffice, or Google Sheets. It is pre-styled with:
-* **Auto-Filters:** Enabled on all headers so you can easily filter by company, location, or visa exclusion.
-* **Bold Headers:** Styled in elegant **Steel Navy (`#1F4E78`)** with white text.
-* **Smart Zebra-Striping:** Interchanging light-blue rows for perfect reading scanner visibility.
-* **Dynamic Column Widths:** Automatically expanded to prevent data-clipping.
-* **Exclusion Flags:** Cells in "Visa Exclusions Found?" are colored **Light Red (`#FFC7CE`)** with bold red text if a restriction keyword was detected, or **Light Green (`#C6EFCE`)** if clean.
+### 1. The Curated Spreadsheet (`curated_job_opportunities.xlsx`)
+This file is generated in your workspace root. You can open it in Microsoft Excel, LibreOffice, or Google Sheets. It features professional styling:
+* **Interactive Headers:** Formatted in elegant **Steel Navy (`#1F4E78`)** with bold white text and active auto-filtering enabled across all columns.
+* **Smart Zebra-Striping:** Interchanging light-blue rows (`#F2F6FA`) for enhanced scanner readability.
+* **Exclusion Flags:** Cells in the "Exclusions Found?" column are dynamically color-coded: **Light Red (`#FFC7CE`)** with bold red text if a restriction keyword was triggered, and **Light Green (`#C6EFCE`)** with dark green text if clean.
+* **Auto-Adjusted Widths:** Columns are automatically expanded dynamically based on content length to prevent clipping.
 
 ### 2. Error Diagnostics (`scraping_errors.log`)
-If any website blocked the crawler or timed out, details are logged here. Run this command to inspect:
+Any connection issues, timeouts, or access limits encountered are isolated here for diagnostic review:
 ```bash
 cat scraping_errors.log
 ```
-*Example entry:*
+*Example Entry:*
 ```text
-[2026-05-31 11:52:10] Company: 'SoftTech Solutions Ltd'
+[2026-05-31 12:05:10] Company: 'SoftTech Solutions Ltd'
   Requested URL: https://softtech.example/careers
   Error Type: HttpError
   Details: 403 Forbidden
@@ -155,8 +149,8 @@ cat scraping_errors.log
 
 ---
 
-## 💡 Troubleshooting & Production Customizations
+## 💡 Customizations & Custom Extensions
 
-* **Changing Delay Speed:** If you need faster scraping and are running against targets without strict firewalls, you can decrease the delay in `job_spider_project/settings.py` (e.g. `DOWNLOAD_DELAY = 1.0`).
-* **Custom Job Keywords:** You can expand the target role matching rules by editing the `JOB_KEYWORDS` array inside `job_spider_project/spiders/job_spider.py` (e.g., adding "Security analyst", "System Administrator").
-* **Resetting Scraped Cache:** Delete `curated_targets.json` to start the pre-scrape discovery phase from scratch, or delete the `.xlsx` file before running the spider to generate fresh listings.
+* **Modifying Crawling Speeds:** To change scrape concurrency or speed, adjust parameters in `job_spider_project/settings.py` (e.g. lowering `DOWNLOAD_DELAY = 1.0` or raising concurrency settings).
+* **Adding Custom Exclusion Keywords:** Customize the exclusion filter list by modifying the `EXCLUSION_KEYWORDS` array inside `job_spider_project/spiders/job_spider.py` (e.g. adding specific tools, frameworks, or experience tiers).
+* **Resetting Cache:** Simply delete `curated_targets.json` to trigger target discovery from scratch, or delete the `.xlsx` file before running the spider to produce a completely fresh workbook.

@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-UK Gov Sponsorship Tech Job Scraper Spider (job_spider.py)
------------------------------------------------------------
+Corporate Lead Tech Job Scraper Spider (job_spider.py)
+-------------------------------------------------------
 Author: Antigravity AI
 Description:
     Core Scrapy spider that reads targets from curated_targets.json, crawls
     them politely, extracts tech roles, parses details (salary, location),
-    checks for visa exclusions, and gracefully records soft errors.
+    checks for custom exclusion keywords, and gracefully records soft errors.
 """
 
 import os
@@ -23,8 +23,8 @@ JOB_KEYWORDS = [
     "cloud architect", "computer science", "backend", "frontend"
 ]
 
-# Exclusions search keywords for visa/sponsorship warning flags
-SPONSORSHIP_KEYWORDS = ["visa", "sponsor", "indigenous"]
+# Exclusion search keywords for role/location restriction warning flags
+EXCLUSION_KEYWORDS = ["visa", "sponsor", "indigenous"]
 
 # Common UK Tech Cities for location fallback scanner
 UK_CITIES = [
@@ -144,8 +144,8 @@ class JobHunterSpider(scrapy.Spider):
         body_text = " ".join([text.strip() for text in body_elements if text.strip()])
         body_text_lower = body_text.lower()
         
-        # 2. Flag Visa Sponsorship Exclusion keywords
-        sponsorship_found = any(word in body_text_lower for word in SPONSORSHIP_KEYWORDS)
+        # 2. Flag custom exclusion keywords (e.g. restriction markers)
+        exclusion_found = any(word in body_text_lower for word in EXCLUSION_KEYWORDS)
         
         # 3. Parse Salary Range via resilient Regex
         # Matches patterns like £45,000 - £55,000, £50k - £60k, £70k per annum, $80,000, etc.
@@ -211,7 +211,7 @@ class JobHunterSpider(scrapy.Spider):
         item["location"] = location
         item["salary_range"] = salary_range
         item["application_url"] = application_url
-        item["sponsorship_keyword_found"] = sponsorship_found
+        item["exclusion_keyword_found"] = exclusion_found
         item["date_scraped"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         yield item
@@ -238,9 +238,9 @@ class JobHunterSpider(scrapy.Spider):
                 item["salary_range"] = "Not Specified"
                 item["application_url"] = response.url
                 
-                # Quick scan of parent container text for sponsorship warnings
+                # Quick scan of parent container text for exclusion warnings
                 parent_text = "".join(elem.xpath("..//text()").getall()).lower()
-                item["sponsorship_keyword_found"] = any(w in parent_text for w in SPONSORSHIP_KEYWORDS)
+                item["exclusion_keyword_found"] = any(w in parent_text for w in EXCLUSION_KEYWORDS)
                 item["date_scraped"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 
                 yield item
